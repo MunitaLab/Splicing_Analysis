@@ -31,7 +31,7 @@ Este pipeline de Nextflow está diseñado para realizar un análisis completo de
 
 1. Clona este repositorio:
    ```
-
+   https://github.com/MunitaLab/Splicing_Analysis.git
    ```
 
 2. Instala Nextflow:
@@ -239,7 +239,7 @@ Si utilizas este pipeline en tu investigación, por favor cítalo como:
 - [Reyes, Francisca] - fcastillor.19@gmail.com
 - [Munita, Roberto] - robertomunita@gmail.com
 
-- URL del Proyecto: [https://github.com/fcastillo1/differential-splicing-pipeline](https://github.com/fcastillo1/Splicing_Analysis)
+- URL del Proyecto: https://github.com/MunitaLab/Splicing_Analysis.git 
 
 ## Agradecimientos
 
