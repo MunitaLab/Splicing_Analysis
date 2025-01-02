@@ -1,0 +1,412 @@
+---
+title: "Análisis de Expresión Diferencial con DESeq2"
+subtitle: "Pipeline de RNA-Seq - FReyes"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  flexdashboard::flex_dashboard:
+    theme: flatly
+params:
+  deseq2_results: "deseq2_results.csv"
+  normalized_counts: "normalized_counts.csv"
+  samplesheet: "samplesheet.csv"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, 
+                      warning = FALSE, 
+                      message = FALSE,
+                      fig.width = 10,
+                      fig.height = 7)
+
+# Cargar librerías necesarias - Removido el bloque de instalación
+suppressPackageStartupMessages({
+    library(flexdashboard)
+    library(tidyverse)
+    library(plotly)
+    library(DT)
+    library(pheatmap)
+    library(RColorBrewer)
+    library(ggrepel)
+    library(scales)
+    library(kableExtra)
+    library(DESeq2)
+})
+
+# Función para leer datos de manera segura
+safe_read <- function(file_path, sep=",", ...) {
+    if (!file.exists(file_path)) {
+        stop(paste("File not found:", file_path))
+    }
+    tryCatch({
+        data <- read.csv(file_path, ...)
+        message(paste("Successfully loaded:", file_path))
+        return(data)
+    }, error = function(e) {
+        stop(paste("Error reading", file_path, ":", e$message))
+    })
+}
+
+# Cargar datos
+deseq2_results <- safe_read(params$deseq2_results, row.names = 1)
+normalized_counts <- safe_read(params$normalized_counts, row.names = 1)
+samples <- safe_read(params$samplesheet)
+
+# Verificar que los datos se cargaron correctamente
+if(is.null(deseq2_results) || is.null(normalized_counts) || is.null(samples)) {
+    stop("No se pudieron cargar uno o más archivos de datos necesarios")
+}
+
+# Función para formatear p-valores
+format_pvalue <- function(p) {
+    ifelse(p < 0.001, "<0.001", sprintf("%.3f", p))
+}
+```
+
+Resumen {data-icon="fa-home"}
+=====================================
+
+Row {data-height=150}
+-------------------------------------
+
+### Genes Analizados
+```{r}
+genes_analizados <- nrow(deseq2_results)
+valueBox(genes_analizados, 
+         caption = "Genes Totales",
+         icon = "fa-dna",
+         color = "#48B5A3")
+```
+
+### DEGs
+```{r}
+sig_genes <- sum(deseq2_results$padj < 0.05 & abs(deseq2_results$log2FoldChange) >= 1, na.rm = TRUE)
+valueBox(sig_genes, 
+         caption = "Genes Diferencialmente Expresados",
+         icon = "fa-chart-bar",
+         color = "primary")
+```
+
+### Sobreexpresados
+```{r}
+up_reg <- sum(deseq2_results$padj < 0.05 & deseq2_results$log2FoldChange >= 1, na.rm = TRUE)
+valueBox(up_reg, 
+         caption = "Genes Sobreexpresados",
+         icon = "fa-arrow-up",
+         color = "lightblue")
+```
+
+### Subexpresados
+```{r}
+down_reg <- sum(deseq2_results$padj < 0.05 & deseq2_results$log2FoldChange <= -1, na.rm = TRUE)
+valueBox(down_reg, 
+         caption = "Genes Subexpresados",
+         icon = "fa-arrow-down",
+         color = "pink")
+```
+
+Row {data-height=350}
+-------------------------------------
+
+### Información de Muestras
+```{r}
+DT::datatable(
+    samples,
+    options = list(pageLength = 10, dom = 't'),
+    caption = "Información de las muestras"
+)
+```
+
+Visualizaciones {data-icon="fa-chart-area"}
+===================================== 
+
+Column {.tabset}
+-------------------------------------
+
+### MA Plot
+```{r}
+ma_plot <- ggplot(deseq2_results %>%
+    mutate(Expression = case_when(
+        padj < 0.05 & log2FoldChange >= 1 ~ "Sobreexpresado",
+        padj < 0.05 & log2FoldChange <= -1 ~ "Subexpresado",
+        is.na(padj) ~ "NA",
+        TRUE ~ "No significativo"
+    )) %>%
+    mutate(label = ifelse(padj < 0.05 & abs(log2FoldChange) >= 1, 
+                         gene_name, "")), 
+    aes(x = baseMean, 
+        y = log2FoldChange,
+        color = Expression,
+        text = paste("Gen:", gene_name,
+                    "\nbaseMean:", round(baseMean, 2),
+                    "\nlog2FC:", round(log2FoldChange, 2),
+                    "\npadj:", format_pvalue(padj)))) +
+    geom_point(alpha = 0.6, size = 1) +
+    scale_x_log10() +
+    geom_hline(yintercept = c(-1, 0, 1), linetype = "dashed", color = "blue") +
+    scale_color_manual(values = c("NA" = "black", 
+                                "Sobreexpresado" = "lightblue", 
+                                "Subexpresado" = "pink",
+                                "No significativo" = "grey50")) +
+    geom_text_repel(aes(label = label),
+                    max.overlaps = 20,
+                    size = 3) +
+    labs(x = "Media de la expresión normalizada",
+         y = "Log2 Fold Change",
+         color = "Estado") +
+    theme_minimal()
+
+ggplotly(ma_plot)
+```
+
+### Volcano Plot
+```{r}
+volcano_plot <- ggplot(deseq2_results %>%
+    mutate(Expression = case_when(
+        padj < 0.05 & log2FoldChange >= 1 ~ "Sobreexpresado",
+        padj < 0.05 & log2FoldChange <= -1 ~ "Subexpresado",
+        is.na(padj) ~ "NA",
+        TRUE ~ "No significativo"
+    )) %>%
+    mutate(label = ifelse(padj < 0.05 & abs(log2FoldChange) >= 1, 
+                         gene_name, "")), 
+    aes(x = log2FoldChange, 
+        y = -log10(padj),
+        color = Expression,
+        text = paste("Gen:", gene_name,
+                    "\nlog2FC:", round(log2FoldChange, 2),
+                    "\npadj:", format_pvalue(padj)))) +
+    geom_point(alpha = 0.6, size = 1) +
+    scale_color_manual(values = c("NA" = "black", 
+                                "Sobreexpresado" = "lightblue", 
+                                "Subexpresado" = "pink",
+                                "No significativo" = "grey50")) +
+    geom_text_repel(aes(label = label),
+                    max.overlaps = 20,
+                    size = 3) +
+    labs(x = "Log2 Fold Change",
+         y = "-Log10 p-valor ajustado",
+         color = "Estado") +
+    theme_minimal() +
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+    geom_vline(xintercept = c(-1, 1), linetype = "dashed")
+
+ggplotly(volcano_plot)
+```
+
+### PCA Plot
+```{r}
+# Preparar datos para PCA
+vst_counts <- log2(normalized_counts + 1)
+pca_result <- prcomp(t(vst_counts), scale. = TRUE)
+pca_data <- as.data.frame(pca_result$x)
+pca_data$condition <- samples$condition
+pca_data$sample_id <- rownames(pca_data)
+
+# Calcular porcentaje de varianza
+var_exp <- round(100 * pca_result$sdev^2/sum(pca_result$sdev^2), 1)
+
+# Crear PCA plot
+pca_plot <- ggplot(pca_data, 
+    aes(x = PC1, 
+        y = PC2,
+        color = condition,
+        text = paste("Muestra:", sample_id,
+                    "\nCondición:", condition,
+                    "\nPC1:", round(PC1, 2),
+                    "\nPC2:", round(PC2, 2)))) +
+    geom_point(size = 3) +
+    xlab(paste0("PC1: ", var_exp[1], "% varianza")) +
+    ylab(paste0("PC2: ", var_exp[2], "% varianza")) +
+    theme_minimal() +
+    scale_color_manual(values = c("control" = "lightblue", "pae" = "pink")) +
+    labs(title = "Análisis de Componentes Principales",
+         color = "Condición")
+
+ggplotly(pca_plot)
+```
+
+### Heatmap
+```{r}
+# Seleccionar genes significativos
+sig_genes <- which(deseq2_results$padj < 0.05 & abs(deseq2_results$log2FoldChange) >= 1)
+top_genes <- head(sig_genes[order(abs(deseq2_results$log2FoldChange[sig_genes]), decreasing = TRUE)], 50)
+
+if(length(top_genes) > 0) {
+    # Preparar matriz para el heatmap
+    mat <- as.matrix(normalized_counts[top_genes, ])
+    
+    # Log-transformación
+    mat <- log2(mat + 1)
+    
+    # Usar gene names como nombres de filas
+    rownames(mat) <- deseq2_results$gene_name[top_genes]
+    
+    # Realizar clustering jerárquico
+    hc_genes <- hclust(dist(mat))
+    hc_samples <- hclust(dist(t(mat)))
+    
+    # Reordenar la matriz según el clustering
+    mat <- mat[hc_genes$order, hc_samples$order]
+    
+    # Escalar los datos por fila
+    mat_scaled <- t(scale(t(mat)))
+    
+    # Convertir a formato largo para plotly
+    melted_mat <- reshape2::melt(mat_scaled)
+    colnames(melted_mat) <- c("Gene", "Sample", "Expression")
+    
+    # Asegurar el orden correcto
+    melted_mat$Gene <- factor(melted_mat$Gene, levels = rownames(mat))
+    melted_mat$Sample <- factor(melted_mat$Sample, levels = colnames(mat))
+    
+    # Añadir información de condición
+    melted_mat$Condition <- samples$condition[match(melted_mat$Sample, colnames(mat))]
+    
+    # Crear heatmap interactivo con plotly
+    plot_ly(
+        data = melted_mat,
+        x = ~Sample,
+        y = ~Gene,
+        z = ~Expression,
+        type = "heatmap",
+        colors = colorRampPalette(c("navy", "white", "firebrick3"))(100),
+        hoverinfo = "text",
+        text = ~paste(
+            "Gen:", Gene,
+            "\nMuestra:", Sample,
+            "\nCondición:", Condition,
+            "\nExpresión:", round(Expression, 2)
+        )
+    ) %>%
+    layout(
+        title = "Top 50 Genes Diferencialmente Expresados",
+        xaxis = list(
+            title = "",
+            tickangle = 45,
+            tickfont = list(size = 10),
+            showgrid = FALSE
+        ),
+        yaxis = list(
+            title = "",
+            tickfont = list(size = 10),
+            showgrid = FALSE
+        ),
+        margin = list(l = 150, r = 50, b = 100, t = 50)
+    ) %>%
+    colorbar(
+        title = "Expresión\nNormalizada",
+        tickfont = list(size = 10),
+        len = 0.5
+    ) %>%
+    add_annotations(
+        x = 1,
+        y = 1.1,
+        text = "Condición",
+        showarrow = FALSE,
+        xref = "paper",
+        yref = "paper",
+        font = list(size = 12)
+    )
+}
+```
+
+Resultados {data-icon="fa-table"}
+===================================== 
+
+Column {.tabset}
+-------------------------------------
+
+### Todos los Genes
+```{r}
+DT::datatable(
+    deseq2_results %>%
+    mutate(
+        GeneID = rownames(deseq2_results),
+        Expression = case_when(
+            padj < 0.05 & log2FoldChange >= 1 ~ "Sobreexpresado",
+            padj < 0.05 & log2FoldChange <= -1 ~ "Subexpresado",
+            TRUE ~ "No significativo"
+        )
+    ) %>%
+    select(GeneID, gene_name, everything()),
+    options = list(
+        pageLength = 15,
+        scrollX = TRUE,
+        dom = 'Bfrtip',
+        buttons = c('csv', 'excel')
+    ),
+    filter = 'top',
+    caption = "Resultados completos del análisis diferencial"
+) %>%
+    formatRound(columns = c('baseMean', 'log2FoldChange', 'lfcSE', 'stat'), digits = 2) %>%
+    formatSignif(columns = c('pvalue', 'padj'), digits = 3)
+```
+
+### Genes Sobreexpresados
+```{r}
+DT::datatable(
+    deseq2_results %>%
+    filter(padj < 0.05, log2FoldChange >= 1) %>%
+    mutate(GeneID = rownames(.)) %>%
+    select(GeneID, gene_name, everything()) %>%
+    arrange(padj),
+    options = list(
+        pageLength = 15,
+        scrollX = TRUE,
+        dom = 'Bfrtip',
+        buttons = c('csv', 'excel')
+    ),
+    caption = "Genes sobreexpresados (padj < 0.05, log2FC >= 1)"
+) %>%
+    formatRound(columns = c('baseMean', 'log2FoldChange', 'lfcSE', 'stat'), digits = 2) %>%
+    formatSignif(columns = c('pvalue', 'padj'), digits = 3)
+```
+
+### Genes Subexpresados
+```{r}
+DT::datatable(
+    deseq2_results %>%
+    filter(padj < 0.05, log2FoldChange <= -1) %>%
+    mutate(GeneID = rownames(.)) %>%
+    select(GeneID, gene_name, everything()) %>%
+    arrange(padj),
+    options = list(
+        pageLength = 15,
+        scrollX = TRUE,
+        dom = 'Bfrtip',
+        buttons = c('csv', 'excel')
+    ),
+    caption = "Genes subexpresados (padj < 0.05, log2FC <= -1)"
+) %>%
+    formatRound(columns = c('baseMean', 'log2FoldChange', 'lfcSE', 'stat'), digits = 2) %>%
+    formatSignif(columns = c('pvalue', 'padj'), digits = 3)
+```
+
+Métodos {data-icon="fa-info-circle"}
+===================================== 
+
+### Descripción del Análisis
+
+Este análisis de expresión diferencial se realizó utilizando:
+
+- **Software**: DESeq2 versión `r packageVersion("DESeq2")`
+- **Diseño experimental**: Comparación entre condiciones `r unique(samples$condition)`
+- **Umbral de significancia**: 
+  - padj < 0.05
+  - |log2FC| ≥ 1
+- **Esquema de colores**:
+  - Sobreexpresados: Celeste
+  - Subexpresados: Rosa
+  - No significativos: Gris
+  - NA: Negro
+
+Los pasos del análisis incluyeron:
+1. Normalización de conteos
+2. Estimación de dispersión
+3. Test de expresión diferencial
+4. Corrección por múltiples pruebas (Benjamini-Hochberg)
+
+### Información de la Sesión
+```{r}
+sessionInfo()
+```
